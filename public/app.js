@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id);
-const labels = { processing: 'Обрабатывается', ready: 'Готово', error: 'Ошибка', uploaded: 'Файл загружен', transcribed: 'Транскрибация готова', deleting: 'Удаление' };
+const labels = { processing: 'Обрабатывается', ready: 'Готово', error: 'Ошибка', uploaded: 'Файл загружен', transcribed: 'Транскрибация готова', deleting: 'Удаление', duplicate: 'Результат уже есть' };
+const processingLabels = { upload: 'Получение файла', transcription: 'Распознавание речи', summary: 'AI-анализ' };
+const statusLabel = item => item.status === 'processing' ? processingLabels[item.activeStage] || labels.processing : labels[item.status];
 let uploading = false, busy = true, connected = false, storageFailed = false;
 let signature = '';
 let localAvailable = false, modeInitialized = false;
@@ -28,6 +30,7 @@ function controls() {
   $('mode-control').disabled = disabled;
   $('automation-control').disabled = disabled;
   $('choose').disabled = disabled; $('file').disabled = disabled;
+  $('cloud-url').disabled = disabled; $('cloud-add').disabled = disabled;
   for (const control of document.querySelectorAll('[data-action-control]')) control.disabled = disabled || control.dataset.locked === 'true';
   $('dropzone').classList.toggle('disabled', disabled);
   $('activity').hidden = !(busy || uploading) || !connected;
@@ -62,7 +65,7 @@ function stagesPanel(item) {
       const prop = key === 'transcription' ? 'autoTranscribe' : 'autoSummary';
       const label = element('label', undefined, 'auto-label');
       const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.checked = item[prop];
-      checkbox.dataset.actionControl = '1'; checkbox.dataset.locked = String(s[key] === 'done');
+      checkbox.dataset.actionControl = '1'; checkbox.dataset.locked = String(s[key] === 'done' || item.sourceType === 'cloud');
       checkbox.setAttribute('aria-label', `Автозапуск: ${title.slice(3)}`);
       checkbox.addEventListener('change', () => meetingAction(item, 'settings', 'POST', { transcriptionMode: item.transcriptionMode || 'online', autoTranscribe: item.autoTranscribe, autoSummary: item.autoSummary, [prop]: checkbox.checked }));
       label.append(checkbox, document.createTextNode('Авто')); row.append(label);
@@ -79,6 +82,7 @@ function stagesPanel(item) {
     label.append(select); wrapper.append(label);
   }
   const actions = element('div', undefined, 'record-actions');
+  if (item.sourceType === 'cloud' && s.upload === 'error') actions.append(actionButton('Повторить получение', () => meetingAction(item, 'retry-import')));
   if (item.sourceAvailable) actions.append(actionButton('Удалить файл', () => {
     if (confirm('Удалить исходное видео с сервера? Расшифровка и конспект сохранятся.')) meetingAction(item, 'source', 'DELETE');
   }, false, 'secondary'));
@@ -88,6 +92,16 @@ function stagesPanel(item) {
   wrapper.append(actions); return wrapper;
 }
 function showError(text) { $('message').textContent = text; $('message').hidden = !text; }
+function openMeeting(id) {
+  const card = [...document.querySelectorAll('.meeting')].find(node => node.dataset.key === id);
+  if (!card) return;
+  card.open = true; card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  card.querySelector(':scope > summary').focus();
+}
+function resultLink(id, text = 'Открыть существующую запись') {
+  const link = element('a', text, 'download-text'); link.href = `#meeting-${id}`;
+  link.addEventListener('click', event => { event.preventDefault(); openMeeting(id); }); return link;
+}
 function listSection(title, values) {
   const section = element('section', undefined, 'summary-section'); section.append(element('h4', title));
   if (!values.length) section.append(element('p', 'Не зафиксированы', 'muted'));
@@ -101,16 +115,23 @@ function render(meetings) {
   const opened = new Set([...document.querySelectorAll('details[open]')].map(x => x.dataset.key));
   const fragment = document.createDocumentFragment();
   for (const item of meetings) {
-    const card = element('details', undefined, 'meeting'); card.dataset.key = item.id; card.open = opened.has(item.id);
+    const card = element('details', undefined, 'meeting'); card.dataset.key = item.id; card.id = `meeting-${item.id}`; card.open = opened.has(item.id);
     const heading = element('summary');
     const icon = element('span', '▤', 'file-icon'); icon.setAttribute('aria-hidden', 'true');
     const info = element('div', undefined, 'meeting-info'); info.append(element('h3', item.filename), element('time', new Date(item.createdAt).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' })));
-    const badge = element('span', labels[item.status], `badge ${item.status}`);
+    info.append(element('span', item.sourceType === 'cloud' ? 'Из облака' : 'Загружено вручную', 'source-label'));
+    if (item.summary?.overview) info.append(element('p', item.summary.overview, 'summary-preview'));
+    const badge = element('span', statusLabel(item), `badge ${item.status}`);
     heading.append(icon, info, badge, element('span', '⌄', 'chevron')); card.append(heading);
     const body = element('div', undefined, 'meeting-body');
-    if (item.stages) body.append(stagesPanel(item));
+    if (item.duplicateOf) {
+      body.append(element('p', 'Этот файл уже проанализирован. Повторный AI-анализ не запускался.'), resultLink(item.duplicateOf, 'Открыть готовый результат'));
+      const actions = element('div', undefined, 'record-actions');
+      actions.append(actionButton('Удалить ссылку', () => meetingAction(item, '', 'DELETE'), false, 'secondary'));
+      body.append(actions);
+    } else if (item.stages) body.append(stagesPanel(item));
     body.append(element('p', `Распознавание: ${item.transcriptionMode === 'local' ? 'локально · GigaAM v3' : 'онлайн · OpenAI'}`, 'muted'));
-    if (item.status === 'processing') body.append(element('p', 'Обрабатываем запись. Результат появится здесь автоматически.', 'muted'));
+    if (item.status === 'processing') body.append(element('p', `${statusLabel(item)}. Можно обновить или закрыть страницу: задача продолжится на сервере.`, 'muted'));
     if (item.status === 'error') body.append(element('p', item.error, 'error-box'));
     if (item.summary) {
       const s = item.summary;
@@ -172,6 +193,8 @@ async function refresh() {
     const response = await fetch('/api/meetings', { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error();
     const data = await response.json(); busy = data.busy; connected = true; storageFailed = data.storageFailed;
+    const active = data.meetings.find(item => item.status === 'processing');
+    $('activity').querySelector('strong').textContent = active ? statusLabel(active) : 'Обрабатывается';
     localAvailable = Boolean(data.local?.available);
     if (!modeInitialized) {
       let selected;
@@ -209,6 +232,21 @@ async function upload(file) {
   finally { uploading = false; $('file').value = ''; await refresh(); }
 }
 $('choose').addEventListener('click', () => $('file').click());
+$('cloud-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (actionPending || busy || uploading || !connected || storageFailed) return;
+  actionPending = true; controls(); showError('');
+  const result = $('cloud-result'); result.hidden = false; result.textContent = 'Проверяем ссылку…';
+  try {
+    const response = await fetch('/api/meetings/import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Meeting-Upload': '1' }, body: JSON.stringify({url:$('cloud-url').value, transcriptionMode:mode()}) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Не удалось добавить запись.');
+    await refresh();
+    result.replaceChildren(document.createTextNode(data.duplicate ? 'Эта ссылка уже добавлена. Повторная обработка не запущена. ' : 'Получение файла запущено на сервере. '), resultLink(data.id, data.status === 'ready' ? 'Открыть готовый результат' : 'Открыть запись'));
+    if (!data.duplicate) openMeeting(data.id);
+  } catch(error) { result.textContent = error instanceof TypeError ? 'Нет связи с сервером. Проверьте список встреч перед повторной попыткой.' : error.message; }
+  finally { actionPending = false; controls(); }
+});
 $('usage-panel').addEventListener('toggle', refreshUsage);
 for (const id of ['auto-transcribe', 'auto-summary']) $(id).addEventListener('change', () => { try { localStorage.setItem(id, String($(id).checked)); } catch {} });
 for (const radio of document.querySelectorAll('input[name="transcription-mode"]')) radio.addEventListener('change', () => {

@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, mkdir, open, rm } from 'node:fs/promises';
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { Store } from './lib/store.mjs';
 import { meetingText } from './lib/text-export.mjs';
 import { MAX_BYTES, MAX_SECONDS, UserError, logError } from './lib/common.mjs';
@@ -10,6 +10,7 @@ import { extractAudio, hasSound, inspectMedia } from './lib/media.mjs';
 import { transcribe, summarize } from './lib/ai.mjs';
 import { recordUsage, readUsage, totals } from './lib/usage.mjs';
 import { LOCAL_MODEL, localStatus, transcribeLocalDetailed } from './lib/local-asr.mjs';
+import { downloadRecording, normalizeCloudUrl } from './lib/cloud-import.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 export function configuration() {
@@ -65,6 +66,18 @@ export async function createApplication(config = configuration()) {
     try {
       if (firstStage === 'upload') {
         await begin('upload');
+        if (item.sourceType === 'cloud' && !item.sourceAvailable) {
+          await mkdir(store.sourceDirectory(item.id), { recursive: true });
+          Object.assign(item, await (config.cloudDownload || downloadRecording)(item.sourceUrl, store.sourceDirectory(item.id)));
+          const duplicate = store.list().find(other => other.id !== item.id && other.sourceHash === item.sourceHash && other.status === 'ready');
+          if (duplicate) {
+            item.duplicateOf = duplicate.id; item.status = 'duplicate'; item.activeStage = null;
+            // Keep the URL alias for future submissions, but no second video or AI job.
+            item.stages.upload = 'pending';
+            return;
+          }
+          await store.save(item);
+        }
         await inspectMedia(store.sourcePath(item), config);
         item.sourceAvailable = true; item.stages.upload = 'done'; item.activeStage = null; item.status = 'uploaded';
         await store.save(item);
@@ -134,7 +147,7 @@ export async function createApplication(config = configuration()) {
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw new UserError('Запрос с другого сайта запрещён.', 403);
         if (req.headers['x-meeting-upload'] !== '1') throw new UserError('Некорректный запрос.', 400);
         if (storageFailed) throw new UserError('Не удалось сохранить данные. Проверьте свободное место и перезапустите сервер.', 503);
-        if (busy) throw new UserError('Уже обрабатывается запись. Дождитесь её завершения.', 409);
+        if (busy && url.pathname !== '/api/meetings/import') throw new UserError('Уже обрабатывается запись. Дождитесь её завершения.', 409);
       }
       if (req.method === 'GET' && url.pathname === '/api/usage') {
         const log = await readUsage(config.dataDir);
@@ -148,6 +161,31 @@ export async function createApplication(config = configuration()) {
       if (req.method === 'GET' && url.pathname === '/api/meetings') {
         return json(res, 200, { meetings: store.list(), busy, storageFailed, configured: Boolean(config.key), local, maxBytes: MAX_BYTES, maxSeconds: MAX_SECONDS });
       }
+      if (req.method === 'POST' && url.pathname === '/api/meetings/import') {
+        let raw = ''; let size = 0;
+        for await (const chunk of req) { size += chunk.length; if (size > 16384) throw new UserError('Слишком длинная ссылка.', 413); raw += chunk; }
+        let body;
+        try { body = JSON.parse(raw); } catch { throw new UserError('Некорректный запрос импорта.'); }
+        const sourceUrl = normalizeCloudUrl(body?.url);
+        const transcriptionMode = body?.transcriptionMode || 'local';
+        if (!['local','online'].includes(transcriptionMode)) throw new UserError('Выберите локальную или онлайн-расшифровку.');
+        const existing = store.list().find(item => item.sourceUrl === sourceUrl);
+        if (existing) {
+          const target = store.items.get(existing.duplicateOf) || existing;
+          return json(res, 200, { id: target.id, duplicate: true, status: target.status });
+        }
+        if (busy) throw new UserError('Уже обрабатывается запись. Дождитесь её завершения.', 409);
+        busy = true;
+        const item = { id: randomUUID(), filename: 'Запись из облака', extension: '.mp4', sourceType: 'cloud', sourceUrl,
+          transcriptionMode, createdAt: new Date().toISOString(), status: 'processing', transcript: '', summary: null, error: null,
+          sourceAvailable: false, autoTranscribe: true, autoSummary: true, activeStage: 'upload',
+          stages: { upload: 'running', transcription: 'pending', summary: 'pending' } };
+        try {
+          await store.save(item);
+          job = processMeeting(item, 'upload');
+          return json(res, 202, { id: item.id });
+        } catch (error) { busy = false; throw error; }
+      }
       if (req.method === 'POST' && url.pathname === '/api/meetings') {
         const transcriptionMode = req.headers['x-transcription-mode'] || 'online';
         if (!['local', 'online'].includes(transcriptionMode)) throw new UserError('Выберите локальную или онлайн-расшифровку.');
@@ -159,7 +197,7 @@ export async function createApplication(config = configuration()) {
         if (!['.mp4', '.webm'].includes(extension)) throw new UserError('Формат файла не поддерживается. Загрузите WebM или MP4.');
         if (Number(req.headers['content-length']) > MAX_BYTES) throw new UserError('Файл больше 1 ГБ. Выберите более короткую запись.', 413);
         busy = true;
-        const item = { id: randomUUID(), filename, extension, transcriptionMode, createdAt: new Date().toISOString(), status: 'processing', transcript: '', summary: null, error: null,
+        const item = { id: randomUUID(), filename, extension, sourceType: 'manual', transcriptionMode, createdAt: new Date().toISOString(), status: 'processing', transcript: '', summary: null, error: null,
           sourceAvailable: false, autoTranscribe: req.headers['x-auto-transcribe'] !== 'false', autoSummary: req.headers['x-auto-summary'] !== 'false',
           activeStage: 'upload', stages: { upload: 'running', transcription: 'pending', summary: 'pending' } };
         const directory = store.sourceDirectory(item.id);
@@ -169,14 +207,16 @@ export async function createApplication(config = configuration()) {
           await store.save(item);
           const video = join(directory, `source${extension}`);
           handle = await open(video, 'wx');
-          let size = 0;
+          let size = 0; const hash = createHash('sha256');
           for await (const chunk of req) {
             size += chunk.length;
             if (size > MAX_BYTES) throw new UserError('Файл больше 1 ГБ. Выберите более короткую запись.', 413);
+            hash.update(chunk);
             await handle.writeFile(chunk);
           }
           await handle.close(); handle = null;
           if (!size) throw new UserError('Файл пустой. Выберите другую запись.');
+          item.sourceHash = hash.digest('hex'); item.sourceBytes = size;
           job = processMeeting(item, 'upload');
           return json(res, 202, { id: item.id });
         } catch (error) {
@@ -191,7 +231,7 @@ export async function createApplication(config = configuration()) {
           throw error;
         }
       }
-      const actionRoute = url.pathname.match(/^\/api\/meetings\/([a-f0-9-]{36})(?:\/(source|transcribe|summarize|annotate|settings|text))?$/);
+      const actionRoute = url.pathname.match(/^\/api\/meetings\/([a-f0-9-]{36})(?:\/(source|transcribe|summarize|annotate|settings|text|retry-import))?$/);
       if (actionRoute) {
         const [, id, action] = actionRoute;
         const existing = store.items.get(id);
@@ -217,6 +257,7 @@ export async function createApplication(config = configuration()) {
             let settings;
             try { settings = JSON.parse(body); } catch { throw new UserError('Некорректные настройки.'); }
             if (!settings || !['local', 'online'].includes(settings.transcriptionMode) || typeof settings.autoTranscribe !== 'boolean' || typeof settings.autoSummary !== 'boolean') throw new UserError('Некорректные настройки.');
+            if (item.sourceType === 'cloud' && (!settings.autoTranscribe || !settings.autoSummary)) throw new UserError('Для облачного импорта распознавание и AI-анализ запускаются автоматически.');
             if (item.stages.transcription === 'done' && settings.transcriptionMode !== item.transcriptionMode) throw new UserError('Расшифровка уже выполнена; её режим нельзя изменить.');
             Object.assign(item, { transcriptionMode: settings.transcriptionMode, autoTranscribe: settings.autoTranscribe, autoSummary: settings.autoSummary });
             await store.save(item);
@@ -230,6 +271,12 @@ export async function createApplication(config = configuration()) {
             busy = false;
             return json(res, 200, { ok: true });
           } catch (error) { busy = false; throw error; }
+        }
+        if (req.method === 'POST' && action === 'retry-import') {
+          if (item.sourceType !== 'cloud' || !item.sourceUrl || item.stages.upload !== 'error') throw new UserError('Получение этой записи не требует повтора.', 409);
+          item.autoTranscribe = true; item.autoSummary = true;
+          busy = true; job = processMeeting(item, 'upload');
+          return json(res, 202, { id });
         }
         if (req.method === 'POST' && action === 'annotate') {
           if (!item.transcript || item.transcriptSegments?.length) throw new UserError('Разметка уже есть или расшифровка ещё не создана.', 409);

@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { configuration, createApplication } from '../server.mjs';
 import { runMedia } from '../lib/media.mjs';
 
-export async function fixture() {
+export async function fixture(overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'meeting-notes-test-'));
-  const config = { ...configuration(), dataDir: join(directory, 'data'), key: '' };
+  const config = { ...configuration(), ...overrides, dataDir: join(directory, 'data'), key: '' };
   const app = await createApplication(config);
   await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   return { ...app, config, directory, base: `http://127.0.0.1:${app.server.address().port}`,
