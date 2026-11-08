@@ -10,7 +10,7 @@ import { extractAudio, hasSound, inspectMedia } from './lib/media.mjs';
 import { transcribe, summarize } from './lib/ai.mjs';
 import { recordUsage, readUsage, totals } from './lib/usage.mjs';
 import { LOCAL_MODEL, localStatus, transcribeLocalDetailed } from './lib/local-asr.mjs';
-import { downloadRecording, normalizeCloudUrl } from './lib/cloud-import.mjs';
+import { downloadRecording, normalizeCloudUrl, isYandexShareUrl } from './lib/cloud-import.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 export function configuration() {
@@ -167,6 +167,9 @@ export async function createApplication(config = configuration()) {
         let body;
         try { body = JSON.parse(raw); } catch { throw new UserError('Некорректный запрос импорта.'); }
         const sourceUrl = normalizeCloudUrl(body?.url);
+        const provider = body?.provider ?? 'auto';
+        if (!['auto', 'yandex'].includes(provider)) throw new UserError('Неизвестный источник ссылки.');
+        if (provider === 'yandex' && !isYandexShareUrl(sourceUrl)) throw new UserError('Вставьте публичную ссылку на файл Яндекс Диска вида https://disk.yandex.ru/i/… или /d/… (также поддерживается yadi.sk). Для других ссылок используйте поле «Ссылка на видеозапись».');
         const transcriptionMode = body?.transcriptionMode || 'local';
         if (!['local','online'].includes(transcriptionMode)) throw new UserError('Выберите локальную или онлайн-расшифровку.');
         const existing = store.list().find(item => item.sourceUrl === sourceUrl);

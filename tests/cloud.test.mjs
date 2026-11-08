@@ -17,6 +17,17 @@ function response(bytes, statusCode = 200, headers = {}) {
 const post = (base, path, body) => fetch(base + path, { method:'POST', headers:{'X-Meeting-Upload':'1','Content-Type':'application/json'}, body:JSON.stringify(body) });
 const importUrl = (base,url) => post(base,'/api/meetings/import',{url,transcriptionMode:'local'});
 
+test('Отдельное поле Яндекс Диска проверяет источник до создания задания', async () => {
+  let downloads=0;
+  const f=await fixture({cloudDownload:async()=>{downloads++;throw new Error('Unexpected download');}});
+  try {
+    const r=await post(f.base,'/api/meetings/import',{url:'https://drive.google.com/file/d/test/view',provider:'yandex'});
+    assert.equal(r.status,400);assert.match((await r.json()).error,/публичную ссылку на файл Яндекс Диска/);
+    assert.equal((await post(f.base,'/api/meetings/import',{url:'https://example.com/a',provider:'other'})).status,400);
+    assert.equal(downloads,0);assert.equal(f.store.list().length,0);
+  } finally {await f.cleanup();}
+});
+
 test('Яндекс Диск: публичная ссылка преобразуется через API, запреты и лимиты не обходятся', async () => {
   const source='https://disk.yandex.ru/i/public-test-file';
   let called=0;

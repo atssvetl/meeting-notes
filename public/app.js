@@ -31,6 +31,7 @@ function controls() {
   $('automation-control').disabled = disabled;
   $('choose').disabled = disabled; $('file').disabled = disabled;
   $('cloud-url').disabled = disabled; $('cloud-add').disabled = disabled;
+  $('yandex-url').disabled = disabled; $('yandex-add').disabled = disabled;
   for (const control of document.querySelectorAll('[data-action-control]')) control.disabled = disabled || control.dataset.locked === 'true';
   $('dropzone').classList.toggle('disabled', disabled);
   $('activity').hidden = !(busy || uploading) || !connected;
@@ -232,13 +233,13 @@ async function upload(file) {
   finally { uploading = false; $('file').value = ''; await refresh(); }
 }
 $('choose').addEventListener('click', () => $('file').click());
-$('cloud-form').addEventListener('submit', async event => {
+for (const [prefix, provider] of [['cloud', 'auto'], ['yandex', 'yandex']]) $(`${prefix}-form`).addEventListener('submit', async event => {
   event.preventDefault();
   if (actionPending || busy || uploading || !connected || storageFailed) return;
   actionPending = true; controls(); showError('');
-  const result = $('cloud-result'); result.hidden = false; result.textContent = 'Проверяем ссылку…';
+  const result = $(`${prefix}-result`); result.hidden = false; result.textContent = 'Проверяем ссылку…';
   try {
-    const response = await fetch('/api/meetings/import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Meeting-Upload': '1' }, body: JSON.stringify({url:$('cloud-url').value, transcriptionMode:mode()}) });
+    const response = await fetch('/api/meetings/import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Meeting-Upload': '1' }, body: JSON.stringify({url:$(`${prefix}-url`).value, transcriptionMode:mode(), provider}) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Не удалось добавить запись.');
     await refresh();

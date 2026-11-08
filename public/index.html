@@ -21,10 +21,16 @@
         <label><input type="checkbox" id="auto-summary" checked> Конспект после транскрибации</label>
         <span>Снимите флажок, чтобы запускать этап кнопкой в карточке встречи.</span>
       </fieldset>
+      <form id="yandex-form" class="cloud-import">
+        <label for="yandex-url">Ссылка на Яндекс Диск</label>
+        <div class="cloud-input-row"><input id="yandex-url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://disk.yandex.ru/i/…" maxlength="8192" required aria-describedby="yandex-help"><button id="yandex-add" type="submit">Добавить с Яндекс Диска</button></div>
+        <p id="yandex-help">На Яндекс Диске выберите видео → «Поделиться» → «Скопировать ссылку». Откройте доступ к файлу по ссылке и разрешите скачивание. После получения файла распознавание и платный AI-анализ запустятся автоматически. Если Яндекс временно ограничит скачивание, повторите позже или загрузите файл вручную.</p>
+        <div id="yandex-result" role="status" aria-live="polite" hidden></div>
+      </form>
       <form id="cloud-form" class="cloud-import">
         <label for="cloud-url">Ссылка на видеозапись</label>
         <div class="cloud-input-row"><input id="cloud-url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://…/meeting.mp4" maxlength="8192" required aria-describedby="cloud-help"><button id="cloud-add" type="submit">Добавить из облака</button></div>
-        <p id="cloud-help">Прямая ссылка на MP4/WebM или публичная ссылка Яндекс Диска / Google Drive. Скачивание должно быть доступно без входа и ручных подтверждений сервиса. После импорта автоматически запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
+        <p id="cloud-help">Прямая ссылка на MP4/WebM или публичная ссылка Google Drive. Скачивание должно быть доступно без входа и ручных подтверждений сервиса. После импорта автоматически запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
         <div id="cloud-result" role="status" aria-live="polite" hidden></div>
       </form>
       <div class="dropzone" id="dropzone">

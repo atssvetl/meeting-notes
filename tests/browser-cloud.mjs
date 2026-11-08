@@ -8,11 +8,17 @@ import { fixture, state, settle } from './helpers.mjs';
 import { runMedia } from '../lib/media.mjs';
 import { downloadRecording } from '../lib/cloud-import.mjs';
 
-let bytes, releaseDownload, downloads=0, browser;
+let bytes, releaseDownload, downloads=0, yandexRequests=0, browser;
 const gate=new Promise(r=>{releaseDownload=r;});
 const f=await fixture({cloudDownload:async(url,dir)=>{
   downloads++;await gate;
-  return downloadRecording(url,dir,{openResponse:async()=>Object.assign(Readable.from([bytes]),{statusCode:url.endsWith('private.mp4')?403:200,headers:{'content-disposition':'attachment; filename="cloud-meeting.mp4"'}})});
+  return downloadRecording(url,dir,{openResponse:async target=>{
+    if (new URL(target).hostname === 'cloud-api.yandex.net') {
+      yandexRequests++;
+      return Object.assign(Readable.from([Buffer.from(JSON.stringify({href:'https://files.example/yandex.mp4',method:'GET'}))]),{statusCode:200,headers:{'content-type':'application/json'}});
+    }
+    return Object.assign(Readable.from([bytes]),{statusCode:url.endsWith('private.mp4')?403:200,headers:{'content-disposition':'attachment; filename="cloud-meeting.mp4"'}});
+  }});
 }});
 try {
   if (!(await state(f.base)).local.available) throw new Error('Установите локальные модели для браузерного теста облака');
@@ -24,11 +30,16 @@ try {
   const page=await browser.newPage({viewport:{width:1440,height:1100},locale:'ru-RU'});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(f.base);await page.locator('#empty').waitFor({state:'visible'});
+  await page.getByLabel('Ссылка на Яндекс Диск',{exact:true}).fill('https://example.com/video.mp4');
+  await page.getByRole('button',{name:'Добавить с Яндекс Диска',exact:true}).click();
+  await page.locator('#yandex-result').getByText('Вставьте публичную ссылку',{exact:false}).waitFor();
+  assert.equal(downloads,0);assert.equal(await page.locator('.meeting').count(),0);
   await page.locator('#auto-transcribe').uncheck();await page.locator('#auto-summary').uncheck();
   await page.getByLabel('Ссылка на видеозапись',{exact:true}).fill('https://files.example/cloud.mp4');
   await page.getByRole('button',{name:'Добавить из облака',exact:true}).click();
   await page.locator('.badge.processing').filter({hasText:'Получение файла'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Добавить из облака',exact:true}).isDisabled(),true);
+  assert.equal(await page.locator('#yandex-add').isDisabled(),true);
   const id=(await state(f.base)).meetings[0].id;
   await page.reload();await page.locator('.badge.processing').waitFor();
   releaseDownload();const item=await settle(f.base,id,30000);
@@ -43,6 +54,15 @@ try {
   assert.equal(await page.locator('.source-label').innerText(),'Из облака');
   await page.locator('.transcript > summary').click();
   assert.match((await page.locator('.transcript p').allInnerTexts()).join(' '),/лукоморья/i);
+  await page.locator('#yandex-url').fill('https://disk.yandex.ru/i/browser-public-test');
+  await page.locator('#yandex-add').click();
+  await page.locator('#yandex-result').getByText('Получение файла запущено',{exact:false}).waitFor();
+  const yandexItem=(await state(f.base)).meetings.find(x=>x.sourceUrl?.includes('disk.yandex.ru'));
+  await settle(f.base,yandexItem.id,30000);
+  await page.locator('#activity').waitFor({state:'hidden'});
+  await page.locator('#cloud-url').fill('https://disk.yandex.ru/i/browser-public-test');await page.locator('#cloud-add').click();
+  await page.locator('#cloud-result').getByText('Эта ссылка уже добавлена.',{exact:false}).waitFor();
+  assert.equal(downloads,2);assert.equal(yandexRequests,1);
   await page.locator('#cloud-url').fill('https://files.example/private.mp4');await page.locator('#cloud-add').click();
   await page.locator('.error-box').filter({hasText:'Скачайте файл из облака самостоятельно'}).waitFor();
   await mkdir('test-output',{recursive:true});
