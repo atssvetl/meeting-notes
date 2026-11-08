@@ -5,7 +5,7 @@ import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { normalizeCloudUrl, isPublicAddress, downloadRecording } from '../lib/cloud-import.mjs';
+import { normalizeCloudUrl, isPublicAddress, downloadRecording, resolveCloudDownload } from '../lib/cloud-import.mjs';
 import { fixture, settle, state } from './helpers.mjs';
 import { runMedia } from '../lib/media.mjs';
 import { createApplication } from '../server.mjs';
@@ -16,6 +16,42 @@ function response(bytes, statusCode = 200, headers = {}) {
 }
 const post = (base, path, body) => fetch(base + path, { method:'POST', headers:{'X-Meeting-Upload':'1','Content-Type':'application/json'}, body:JSON.stringify(body) });
 const importUrl = (base,url) => post(base,'/api/meetings/import',{url,transcriptionMode:'local'});
+
+test('Яндекс Диск: публичная ссылка преобразуется через API, запреты и лимиты не обходятся', async () => {
+  const source='https://disk.yandex.ru/i/public-test-file';
+  let called=0;
+  const target=await resolveCloudDownload(source,{openResponse:async(url,_signal,options)=>{
+    called++; const api=new URL(url);
+    assert.equal(api.origin,'https://cloud-api.yandex.net');
+    assert.equal(api.searchParams.get('public_key'),source);assert.equal(options.accept,'application/json');
+    return response(JSON.stringify({href:'https://downloader.disk.yandex.ru/file?token=test',method:'GET'}));
+  }});
+  assert.equal(target,'https://downloader.disk.yandex.ru/file?token=test');assert.equal(called,1);
+  for (const [body,status,pattern] of [
+    ['{}',429,/ограничил/],['{}',503,/временно недоступен/],['{}',403,/не разрешил/],
+    ['{}',200,/не вернул/],[JSON.stringify({href:'https://127.0.0.1/a'}),200,/локальную сеть/],
+    [JSON.stringify({href:'http://example.com/a'}),200,/незащищённую/],['x'.repeat(65537),200,/слишком большой/]
+  ]) await assert.rejects(resolveCloudDownload(source,{openResponse:async()=>response(body,status)}),pattern);
+  assert.equal(await resolveCloudDownload('https://disk.yandex.ru.evil.example/i/id'),'https://disk.yandex.ru.evil.example/i/id');
+});
+
+test('Google Drive: ссылка просмотра, resourcekey и ручное подтверждение безопасности', async () => {
+  assert.equal(await resolveCloudDownload('https://drive.google.com/file/d/public-test-id/view?usp=sharing&resourcekey=key'), 'https://drive.google.com/uc?export=download&id=public-test-id&resourcekey=key');
+  assert.equal(await resolveCloudDownload('https://drive.google.com/open?id=public-test-id'), 'https://drive.google.com/uc?export=download&id=public-test-id');
+  const dir=await mkdtemp(join(tmpdir(),'google-download-'));
+  try {
+    const bytes=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(20)]);
+    const result=await downloadRecording('https://drive.google.com/file/d/public-test-id/view',dir,{openResponse:async(url)=>{
+      assert.equal(new URL(url).pathname,'/uc');return response(bytes,200,{'content-disposition':'attachment; filename="public.mp4"'});
+    }});
+    assert.equal(result.filename,'public.mp4');await rm(join(dir,'source.mp4'));
+    let requests=0;
+    await assert.rejects(downloadRecording('https://drive.google.com/file/d/public-test-id/view',dir,{openResponse:async()=>{
+      requests++;return response('<title>Google Drive - Virus scan warning</title><form action="https://example.com/confirm"></form>',200,{'content-type':'text/html'});
+    }}),/ручного подтверждения/);
+    assert.equal(requests,1);assert.deepEqual(await readdir(dir),[]);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
 
 test('Ссылки: нормализация без разрушения подписи, запрет локальных адресов и небезопасных схем', () => {
   assert.equal(normalizeCloudUrl(' HTTPS://EXAMPLE.COM:443/video.mp4?a=2&b=1#view '),'https://example.com/video.mp4?a=2&b=1');

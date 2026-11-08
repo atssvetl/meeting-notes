@@ -24,7 +24,7 @@
       <form id="cloud-form" class="cloud-import">
         <label for="cloud-url">Ссылка на видеозапись</label>
         <div class="cloud-input-row"><input id="cloud-url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://…/meeting.mp4" maxlength="8192" required aria-describedby="cloud-help"><button id="cloud-add" type="submit">Добавить из облака</button></div>
-        <p id="cloud-help">Нужна прямая ссылка на скачивание MP4/WebM без входа в сервис. После импорта автоматически запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
+        <p id="cloud-help">Прямая ссылка на MP4/WebM или публичная ссылка Яндекс Диска / Google Drive. Скачивание должно быть доступно без входа и ручных подтверждений сервиса. После импорта автоматически запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
         <div id="cloud-result" role="status" aria-live="polite" hidden></div>
       </form>
       <div class="dropzone" id="dropzone">
