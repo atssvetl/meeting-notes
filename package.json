@@ -1,0 +1,20 @@
+{
+  "name": "meeting-notes-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "usage": "node --env-file-if-exists=.env scripts/usage.mjs",
+    "export:text": "node --env-file-if-exists=.env scripts/export-text.mjs",
+    "annotate": "node --env-file-if-exists=.env scripts/annotate.mjs",
+    "setup:local": "python -X utf8 scripts/install-local.py",
+    "setup:diarization": "python -X utf8 scripts/install-diarization.py",
+    "test:local": "node scripts/check-local.mjs",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:ui": "node tests/browser.mjs",
+    "test:real": "node --env-file-if-exists=.env scripts/check-real.mjs"
+  },
+  "devDependencies": { "playwright-core": "^1.63.0" }
+}

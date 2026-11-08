@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f5f4f0"><title>После встречи — конспект записей</title>
+  <link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/" aria-label="После встречи — главная"><span class="mark" aria-hidden="true">пв</span>после встречи<span class="brand-dot">.</span></a><span class="local"><i></i> Локальное приложение</span></header>
+  <main>
+    <div class="intro"><p class="eyebrow">ИЗ РАЗГОВОРА — В ДЕЛО</p><h1>Встреча закончилась.<br><span>Главное осталось.</span></h1><p class="lead">Превратите запись из Телемоста или Zoom в понятный<br class="desktop"> конспект: с решениями, задачами и открытыми вопросами.</p></div>
+    <section class="upload-section" aria-labelledby="upload-title">
+      <div class="section-caption"><span class="step">01</span><h2 id="upload-title">Добавьте запись</h2><span class="caption-note">Управляйте каждым этапом</span></div>
+      <fieldset id="mode-control" class="mode-control" disabled><legend>Распознавание речи</legend>
+        <label><input type="radio" name="transcription-mode" value="local"> Локально</label>
+        <label><input type="radio" name="transcription-mode" value="online" checked> Онлайн</label>
+        <span id="mode-status" role="status"></span>
+      </fieldset>
+      <fieldset id="automation-control" class="mode-control"><legend>Автозапуск для новой записи</legend>
+        <label><input type="checkbox" id="auto-transcribe" checked> Транскрибация после загрузки</label>
+        <label><input type="checkbox" id="auto-summary" checked> Конспект после транскрибации</label>
+        <span>Снимите флажок, чтобы запускать этап кнопкой в карточке встречи.</span>
+      </fieldset>
+      <div class="dropzone" id="dropzone">
+        <div class="upload-icon" aria-hidden="true">↑</div><h3>Одна запись. Всё важное.</h3>
+        <p>Перетащите видео сюда или выберите файл</p>
+        <button type="button" id="choose" disabled>Выбрать запись <span aria-hidden="true">↗</span></button>
+        <input type="file" id="file" accept=".mp4,.webm,video/mp4,video/webm" hidden>
+        <p class="limits">WebM или MP4 · до 1 ГБ · до 30 минут</p>
+      </div>
+      <p class="privacy" id="privacy">Исходное видео хранится на этом компьютере до удаления. Временное аудио удаляется после транскрибации.</p>
+      <div id="local-note" class="notice" hidden>Локальная модель недоступна. Файл можно загрузить, а для локальной транскрибации выполните npm run setup:local и перезапустите сервер. Автоматического переключения на онлайн нет.</div>
+      <div id="config-note" class="notice" hidden>Для конспекта нужен ключ OpenAI в .env. Локальная транскрибация работает без ключа. Отключите автозапуск конспекта, чтобы остановиться после неё.</div>
+      <div id="activity" class="activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Обрабатывается</strong><p>Дождитесь завершения перед новой загрузкой. После загрузки файла страницу можно закрыть — обработка продолжится на сервере.</p></div></div>
+      <p id="message" role="alert" class="error-box" hidden></p>
+      <p id="connection" role="status" class="notice" hidden></p>
+    </section>
+    <section class="history" aria-labelledby="history-title"><div class="section-caption"><span class="step">02</span><h2 id="history-title">Ваши встречи</h2><span class="caption-note">Новые сверху</span></div>
+      <div id="meetings"></div>
+      <div id="empty" class="empty" hidden><div class="empty-icon" aria-hidden="true">≡</div><h3>Здесь будет главное</h3><p>Загрузите первую запись — её конспект<br>и полная расшифровка появятся здесь.</p></div>
+    </section>
+    <details id="usage-panel" class="usage-panel"><summary>Журнал токенов и расходов</summary>
+      <p class="privacy">Последние 100 операций; итог — за всё время. Стоимость расчётная в USD; удаление встречи не удаляет историю расходов.</p>
+      <a href="/api/usage/download" download>Скачать журнал JSONL</a>
+      <p id="usage-total" role="status"></p><div id="usage-entries" class="table-scroll"></div>
+    </details>
+    <footer><span>Меньше переслушивать. Больше делать.</span><span>Ваши встречи, собранные в одном месте.</span></footer>
+  </main>
+</body>
+</html>

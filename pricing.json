@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-11-08",
+  "currency": "USD",
+  "models": {
+    "gpt-transcribe": { "perMinute": 0.0045 },
+    "gpt-4.1-mini": { "inputPerMillion": 0.4, "cachedInputPerMillion": 0.1, "outputPerMillion": 1.6 },
+    "gpt-4.1-mini-2025-04-14": { "inputPerMillion": 0.4, "cachedInputPerMillion": 0.1, "outputPerMillion": 1.6 }
+  }
+}
