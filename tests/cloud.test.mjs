@@ -10,6 +10,7 @@ import { fixture, settle, state } from './helpers.mjs';
 import { runMedia } from '../lib/media.mjs';
 import { createApplication } from '../server.mjs';
 import { localStatus } from '../lib/local-asr.mjs';
+import { googleConfirmation } from '../lib/google-drive.mjs';
 
 function response(bytes, statusCode = 200, headers = {}) {
   return Object.assign(Readable.from([Buffer.from(bytes)]), { statusCode, headers });
@@ -46,7 +47,58 @@ test('Яндекс Диск: публичная ссылка преобразу�
   assert.equal(await resolveCloudDownload('https://disk.yandex.ru.evil.example/i/id'),'https://disk.yandex.ru.evil.example/i/id');
 });
 
-test('Google Drive: ссылка просмотра, resourcekey и ручное подтверждение безопасности', async () => {
+test('Яндекс Диск: временный 429 повторяется ограниченно, лимит файла не повторяется', async () => {
+  const source = 'https://disk.yandex.ru/i/test';
+  let calls = 0;
+  const waits = [];
+  const href = await resolveCloudDownload(source, {
+    wait: async ms => waits.push(ms),
+    openResponse: async () => ++calls < 3
+      ? response('{"error":"TooManyRequestsError"}', 429, {'retry-after':'1'})
+      : response('{"href":"https://files.example/video"}')
+  });
+  assert.equal(href, 'https://files.example/video');
+  assert.equal(calls, 3); assert.deepEqual(waits, [1000,1000]);
+  for (const [body, headers, expectedCalls, pattern] of [
+    ['{"error":"DiskResourceDownloadLimitExceededError"}', {}, 1, /лимит скачивания этого файла/],
+    ['{}', {'retry-after':'60'}, 1, /HTTP 429/],
+    ['{}', {}, 3, /HTTP 429/]
+  ]) {
+    calls = 0;
+    await assert.rejects(resolveCloudDownload(source, {wait:async()=>{},openResponse:async()=>{
+      calls++; return response(body, 429, headers);
+    }}), pattern);
+    assert.equal(calls, expectedCalls);
+  }
+});
+
+test('Яндекс Диск: файл внутри общей папки и редирект скачиваются через временный href', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'yandex-download-'));
+  const bytes = Buffer.concat([Buffer.from([0,0,0,24]), Buffer.from('ftypisom'), Buffer.alloc(20)]);
+  const share = 'https://disk.yandex.ru/d/folder/' + encodeURIComponent('Записи') + '/video.mp4?utm_source=share';
+  const calls = [];
+  try {
+    const result = await downloadRecording('https://files.example/meeting', dir, {openResponse: async url => {
+      calls.push(url);
+      if (calls.length === 1) return response('', 302, {location: share});
+      if (calls.length === 2) {
+        const api = new URL(url);
+        assert.equal(api.pathname, '/v1/disk/public/resources/download');
+        assert.equal(api.searchParams.get('public_key'), 'https://disk.yandex.ru/d/folder');
+        assert.equal(api.searchParams.get('path'), '/Записи/video.mp4');
+        return response(JSON.stringify({href:'https://downloader.disk.yandex.ru/video', method:'GET'}));
+      }
+      assert.equal(url, 'https://downloader.disk.yandex.ru/video');
+      return response(bytes, 200, {'content-disposition':'attachment; filename="video.mp4"'});
+    }});
+    assert.equal(calls.length, 3);
+    assert.equal(result.filename, 'video.mp4');
+    assert.deepEqual(await readFile(join(dir, 'source.mp4')), bytes);
+    await assert.rejects(resolveCloudDownload('https://disk.yandex.ru/d/folder/%ZZ'), /Некорректный путь/);
+  } finally { await rm(dir, {recursive:true, force:true}); }
+});
+
+test('Google Drive: ссылки просмотра, resourcekey и отказ при отсутствии публичного доступа', async () => {
   assert.equal(await resolveCloudDownload('https://drive.google.com/file/d/public-test-id/view?usp=sharing&resourcekey=key'), 'https://drive.google.com/uc?export=download&id=public-test-id&resourcekey=key');
   assert.equal(await resolveCloudDownload('https://drive.google.com/open?id=public-test-id'), 'https://drive.google.com/uc?export=download&id=public-test-id');
   const dir=await mkdtemp(join(tmpdir(),'google-download-'));
@@ -59,8 +111,53 @@ test('Google Drive: ссылка просмотра, resourcekey и ручное
     let requests=0;
     await assert.rejects(downloadRecording('https://drive.google.com/file/d/public-test-id/view',dir,{openResponse:async()=>{
       requests++;return response('<title>Google Drive - Virus scan warning</title><form action="https://example.com/confirm"></form>',200,{'content-type':'text/html'});
-    }}),/ручного подтверждения/);
+    }}),/Откройте доступ/);
     assert.equal(requests,1);assert.deepEqual(await readdir(dir),[]);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('Google Drive: подтверждение большого файла, entities, редирект и проверка MP4', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'google-confirm-'));
+  const bytes = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(20)]);
+  const html = `<form id="download-form" action="https://drive.usercontent.google.com/download?export=download&amp;id=public-test-id" method="get">
+    <input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="a&amp;b&#61;c">
+    <input type="hidden" name="id" value="public-test-id"><input type="hidden" name="export" value="download"></form>`;
+  let calls = 0;
+  try {
+    const result = await downloadRecording('https://drive.google.com/file/d/public-test-id/view?resourcekey=key', dir, {openResponse:async url=>{
+      calls++;
+      if (calls === 1) return response('',303,{location:'https://drive.usercontent.google.com/download?id=public-test-id&export=download&resourcekey=key'});
+      if (calls === 2) return response(html,200,{'content-type':'text/html; charset=utf-8'});
+      const target = new URL(url);
+      assert.equal(target.origin,'https://drive.usercontent.google.com');
+      assert.equal(target.searchParams.get('id'),'public-test-id');
+      assert.equal(target.searchParams.get('resourcekey'),'key');
+      assert.equal(target.searchParams.get('confirm'),'t');
+      assert.equal(target.searchParams.get('uuid'),'a&b=c');
+      return response(bytes,200,{'content-disposition':'attachment; filename="meeting.mp4"'});
+    }});
+    assert.equal(calls,3); assert.equal(result.filename,'meeting.mp4');
+    assert.deepEqual(await readFile(join(dir,'source.mp4')),bytes);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('Google Drive: подтверждение ограничено адресом Google и исходным ID файла', async () => {
+  const page = 'https://drive.google.com/uc?export=download&id=original';
+  const form = (action, id='original') => `<form id="download-form" action="${action}"><input type="hidden" name="id" value="${id}"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"></form>`;
+  for (const target of ['https://example.com/download','http://drive.google.com/uc','https://drive.google.com.evil.example/uc','https://127.0.0.1/uc','https://drive.google.com/accounts']) {
+    assert.throws(()=>googleConfirmation(form(target),page),/неподдерживаемый адрес/);
+  }
+  assert.equal(googleConfirmation(form('https://drive.usercontent.google.com/download','other-file'),page),null);
+  assert.equal(googleConfirmation('<html>Sign in</html>',page),null);
+  await assert.rejects(resolveCloudDownload('https://drive.google.com/drive/folders/folder-id'),/не на папку/);
+  const dir = await mkdtemp(join(tmpdir(),'google-loop-'));
+  try {
+    let calls=0;
+    await assert.rejects(downloadRecording(page,dir,{openResponse:async()=>{
+      calls++;return response(form('https://drive.usercontent.google.com/download'),200,{'content-type':'text/html'});
+    }}),/повторяет подтверждение/);
+    assert.equal(calls,6);assert.deepEqual(await readdir(dir),[]);
+    await assert.rejects(downloadRecording(page,dir,{openResponse:async()=>response('<html>Too many users have viewed or downloaded this file</html>',200,{'content-type':'text/html'})}),/лимит скачивания/);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
@@ -91,11 +188,65 @@ test('Загрузка: поток, хеш, имя из заголовка, ре
       [()=>response(bytes,200,{'content-length':'999'}),/больше 1 ГБ/,{maxBytes:10}],
       [()=>response('',302,{location:'http://127.0.0.1/private'}),/локальную сеть/,{}],
       [()=>response('',302,{location:'/again'}),/перенаправлений/,{}],
-      [()=>{throw new Error('network');},/соединения/,{}]
+      [()=>{throw new Error('network');},/соединение прервалось/,{}]
     ]) {
       await assert.rejects(downloadRecording('https://files.example/video',dir,{openResponse:async()=>make(),...extra}),expected);
       assert.deepEqual(await readdir(dir),[]);
     }
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('Обрыв потока: докачка с Range и If-Range сохраняет байты и SHA-256', async () => {
+  const dir = await mkdtemp(join(tmpdir(),'cloud-resume-'));
+  const bytes = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(80,7)]);
+  let calls=0; const progress=[];
+  try {
+    const result=await downloadRecording('https://files.example/video',dir,{wait:async()=>{},onProgress:p=>progress.push(p),openResponse:async(_url,_signal,options)=>{
+      calls++;
+      if (calls===1) return Object.assign(Readable.from((async function*(){
+        yield bytes.subarray(0,20);throw Object.assign(new Error('reset'),{code:'ECONNRESET'});
+      })()),{statusCode:200,headers:{'content-length':String(bytes.length),etag:'"version-1"','content-disposition':'attachment; filename="meeting.mp4"'}});
+      assert.equal(options.headers.Range,'bytes=20-');assert.equal(options.headers['If-Range'],'"version-1"');
+      return response(bytes.subarray(20),206,{'content-range':`bytes 20-${bytes.length-1}/${bytes.length}`,'content-length':String(bytes.length-20),etag:'"version-1"'});
+    }});
+    assert.equal(calls,2);assert.equal(result.filename,'meeting.mp4');
+    assert.deepEqual(await readFile(join(dir,'source.mp4')),bytes);
+    assert.equal(result.sourceHash,createHash('sha256').update(bytes).digest('hex'));
+    assert(progress.some(p=>p.retries===1&&p.received===20));assert.equal(progress.at(-1).received,bytes.length);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('Повтор: ответ 200 вместо Range и отсутствие валидатора начинают файл заново', async () => {
+  const bytes = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(40,9)]);
+  for (const etag of [undefined,'"version-1"']) {
+    const dir=await mkdtemp(join(tmpdir(),'cloud-restart-'));let calls=0;
+    try {
+      const result=await downloadRecording('https://files.example/video',dir,{wait:async()=>{},openResponse:async(_url,_signal,options)=>{
+        calls++;
+        if(calls===1) return Object.assign(Readable.from((async function*(){yield bytes.subarray(0,20);throw Object.assign(new Error('timeout'),{code:'ETIMEDOUT'});})()),{statusCode:200,headers:etag?{etag}: {}});
+        assert.equal(Boolean(options.headers.Range),Boolean(etag));
+        return response(bytes,200,{'content-length':String(bytes.length)});
+      }});
+      assert.deepEqual(await readFile(join(dir,'source.mp4')),bytes);assert.equal(result.sourceBytes,bytes.length);
+    } finally {await rm(dir,{recursive:true,force:true});}
+  }
+});
+
+test('Повторы ограничены, неверный диапазон не дописывается, ошибки диска не повторяются', async () => {
+  const dir=await mkdtemp(join(tmpdir(),'cloud-retry-fail-'));let calls=0;
+  try {
+    await assert.rejects(downloadRecording('https://files.example/video',dir,{wait:async()=>{},openResponse:async()=>{calls++;throw Object.assign(new Error('reset'),{code:'ECONNRESET'});}}),/код ECONNRESET/);
+    assert.equal(calls,3);assert.deepEqual(await readdir(dir),[]);
+    calls=0;
+    await assert.rejects(downloadRecording('https://files.example/video',dir,{wait:async()=>{},openResponse:async()=>{
+      calls++;
+      if(calls===1) return Object.assign(Readable.from((async function*(){yield Buffer.alloc(20);throw Object.assign(new Error('reset'),{code:'ECONNRESET'});})()),{statusCode:200,headers:{etag:'"version-1"'}});
+      return response('bad',206,{'content-range':'bytes 0-2/30'});
+    }}),/некорректный диапазон/);
+    assert.equal(calls,2);assert.deepEqual(await readdir(dir),[]);
+    calls=0;
+    await assert.rejects(downloadRecording('https://files.example/video',dir,{openResponse:async()=>{calls++;throw Object.assign(new Error('disk'),{code:'ENOSPC'});}}),{code:'ENOSPC'});
+    assert.equal(calls,1);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 

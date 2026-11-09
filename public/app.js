@@ -196,6 +196,22 @@ async function refresh() {
     const data = await response.json(); busy = data.busy; connected = true; storageFailed = data.storageFailed;
     const active = data.meetings.find(item => item.status === 'processing');
     $('activity').querySelector('strong').textContent = active ? statusLabel(active) : 'Обрабатывается';
+    const completed = Object.values(active?.stages || {}).filter(s => s === 'done').length;
+    const started = Date.parse(active?.stageStartedAt || active?.createdAt);
+    const seconds = Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : 0;
+    $('processing-detail').textContent = active
+      ? `Готово этапов: ${completed} из 3 · Текущий этап: ${Math.floor(seconds / 60)} мин ${seconds % 60} с. ${active.activityMessage || 'Обработка продолжается; точный процент этого этапа недоступен.'}`
+      : 'Передача файла на сервер…';
+    const download = active?.activeStage === 'upload' ? active.downloadProgress : null;
+    const progress = $('processing-progress');
+    if (download?.total > 0) {
+      progress.max = download.total; progress.value = download.received;
+      const percent = Math.min(100, Math.floor(download.received / download.total * 100));
+      $('processing-detail').textContent = `Скачано ${(download.received / 1024 / 1024).toFixed(1)} из ${(download.total / 1024 / 1024).toFixed(1)} МБ · ${percent}%${download.retries ? ` · Повтор подключения: ${download.retries}` : ''}`;
+    } else {
+      progress.removeAttribute('value');
+      if (download?.retries) $('processing-detail').textContent += ` Повтор подключения: ${download.retries}.`;
+    }
     localAvailable = Boolean(data.local?.available);
     if (!modeInitialized) {
       let selected;

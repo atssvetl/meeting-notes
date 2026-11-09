@@ -30,7 +30,7 @@
       <form id="cloud-form" class="cloud-import">
         <label for="cloud-url">Ссылка на видеозапись</label>
         <div class="cloud-input-row"><input id="cloud-url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://…/meeting.mp4" maxlength="8192" required aria-describedby="cloud-help"><button id="cloud-add" type="submit">Добавить из облака</button></div>
-        <p id="cloud-help">Прямая ссылка на MP4/WebM или публичная ссылка Google Drive. Скачивание должно быть доступно без входа и ручных подтверждений сервиса. После импорта автоматически запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
+        <p id="cloud-help">Прямая ссылка на MP4/WebM или ссылка на видео в Google Drive. В Google Drive откройте доступ «Все, у кого есть ссылка» и разрешите скачивание. Подтверждение скачивания больших файлов обрабатывается автоматически. После импорта запустятся распознавание и AI-анализ, независимо от флажков выше. Создание конспекта использует платный API OpenAI.</p>
         <div id="cloud-result" role="status" aria-live="polite" hidden></div>
       </form>
       <div class="dropzone" id="dropzone">
@@ -43,7 +43,7 @@
       <p class="privacy" id="privacy">Исходное видео хранится на этом компьютере до удаления. Временное аудио удаляется после транскрибации.</p>
       <div id="local-note" class="notice" hidden>Локальная модель недоступна. Файл можно загрузить, а для локальной транскрибации выполните npm run setup:local и перезапустите сервер. Автоматического переключения на онлайн нет.</div>
       <div id="config-note" class="notice" hidden>Для конспекта нужен ключ OpenAI в .env. Локальная транскрибация работает без ключа. При ручной загрузке можно отключить автозапуск конспекта; импорт из облака всегда запускает AI-анализ.</div>
-      <div id="activity" class="activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Обрабатывается</strong><p>Дождитесь завершения перед новой загрузкой. После загрузки файла страницу можно закрыть — обработка продолжится на сервере.</p></div></div>
+      <div id="activity" class="activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Обрабатывается</strong><progress id="processing-progress" aria-label="Обработка текущего этапа"></progress><p id="processing-detail"></p><p>После загрузки файла страницу можно закрыть — обработка продолжится на сервере.</p></div></div>
       <p id="message" role="alert" class="error-box" hidden></p>
       <p id="connection" role="status" class="notice" hidden></p>
     </section>

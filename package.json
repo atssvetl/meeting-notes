@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
     "usage": "node --env-file-if-exists=.env scripts/usage.mjs",
@@ -17,5 +19,10 @@
     "test:ui:cloud": "node tests/browser-cloud.mjs",
     "test:real": "node --env-file-if-exists=.env scripts/check-real.mjs"
   },
-  "devDependencies": { "playwright-core": "^1.63.0" }
+  "devDependencies": {
+    "playwright-core": "^1.63.0"
+  },
+  "dependencies": {
+    "parse5": "^8.1.1"
+  }
 }

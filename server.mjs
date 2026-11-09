@@ -58,9 +58,15 @@ export async function createApplication(config = configuration()) {
   async function processMeeting(item, firstStage) {
     const directory = join(store.temp, item.id);
     let stage = firstStage;
-    const aiConfig = { ...config, meetingId: item.id, onUsage: entry => recordUsage(config.dataDir, entry) };
+    const aiConfig = { ...config, meetingId: item.id, onUsage: entry => recordUsage(config.dataDir, entry),
+      onActivity: message => {
+        item.activityMessage = message;
+        const visible = store.items.get(item.id); if (visible) visible.activityMessage = message;
+      } };
     const begin = async name => {
       stage = name; item.activeStage = name; item.status = 'processing'; item.stages[name] = 'running'; item.error = null;
+      item.stageStartedAt = new Date().toISOString(); item.activityMessage = null;
+      item.downloadProgress = null;
       await store.save(item);
     };
     try {
@@ -68,7 +74,18 @@ export async function createApplication(config = configuration()) {
         await begin('upload');
         if (item.sourceType === 'cloud' && !item.sourceAvailable) {
           await mkdir(store.sourceDirectory(item.id), { recursive: true });
-          Object.assign(item, await (config.cloudDownload || downloadRecording)(item.sourceUrl, store.sourceDirectory(item.id)));
+          let lastProgress = 0;
+          Object.assign(item, await (config.cloudDownload || downloadRecording)(item.sourceUrl, store.sourceDirectory(item.id), {
+            onProgress: progress => {
+              const now = Date.now();
+              const previous = item.downloadProgress;
+              if (now-lastProgress < 500 && progress.received !== progress.total
+                && previous?.total === progress.total && previous?.retries === progress.retries
+                && !(previous?.received === 0 && progress.received > 0)) return;
+              lastProgress = now; item.downloadProgress = progress;
+              const visible = store.items.get(item.id); if (visible) visible.downloadProgress = progress;
+            }
+          }));
           const duplicate = store.list().find(other => other.id !== item.id && other.sourceHash === item.sourceHash && other.status === 'ready');
           if (duplicate) {
             item.duplicateOf = duplicate.id; item.status = 'duplicate'; item.activeStage = null;

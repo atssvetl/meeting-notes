@@ -49,11 +49,34 @@ test('Расход записывается до проверки результ
   await assert.rejects(summarize('Проверка учёта', config), /не завершил/);
   assert.equal(entries[0].totalTokens, 1100); assert.equal(entries[0].estimatedCostUsd, 0.00056);
   mock.mock.mockImplementation(async () => { throw new Error('network'); });
-  await assert.rejects(summarize('Проверка учёта', config), /не ответил/);
-  assert.equal(entries[1].status, 'unknown'); assert.equal(entries[1].estimatedCostUsd, null);
+  await assert.rejects(summarize('Проверка учёта', config), /ответ OpenAI/);
+  assert.equal(entries[1].status, 'connection_error'); assert.equal(entries[1].estimatedCostUsd, null);
   mock.mock.mockImplementation(async () => new Response('{}', { status: 429 }));
   await assert.rejects(summarize('Проверка учёта', config), /лимит/);
   assert.equal(entries[2].status, 'http_error'); assert.equal(entries[2].httpStatus, 429);
   await assert.rejects(summarize('Проверка учёта', { ...config, key: '' }), /Не настроен/);
   assert.equal(entries.length, 3);
+});
+
+test('Конспект: повтор подключения сохраняет учёт, обрыв после отправки не повторяется', async t => {
+  let calls = 0; const entries = [], waits = [];
+  const config = { key:'test-only', summaryModel:'gpt-4.1-mini',
+    retryDelay:async ms=>waits.push(ms), onUsage:async e=>entries.push(e) };
+  const expected = {overview:'Проверка контракта API',decisions:[],tasks:[],questions:[]};
+  const mock = t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    if (calls < 3) throw new TypeError('fetch failed', {cause:{code:'UND_ERR_CONNECT_TIMEOUT'}});
+    return new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(expected)}]}],usage:{input_tokens:10,output_tokens:10}}));
+  });
+  assert.deepEqual(await summarize('Проверка контракта', config), expected);
+  assert.equal(calls, 3); assert.deepEqual(waits, [1000,2000]);
+  assert.equal(entries.length, 1); assert.equal(entries[0].status, 'received');
+  calls = 0;
+  mock.mock.mockImplementation(async()=>{calls++;throw new TypeError('fetch failed',{cause:{code:'ECONNRESET'}});});
+  await assert.rejects(summarize('Проверка контракта', config), /ECONNRESET/);
+  assert.equal(calls, 1); assert.equal(entries.length, 2);
+  calls = 0;
+  mock.mock.mockImplementation(async()=>{calls++;throw new TypeError('fetch failed',{cause:{code:'UND_ERR_CONNECT_TIMEOUT'}});});
+  await assert.rejects(summarize('Проверка контракта', config), /Повторите только этот этап/);
+  assert.equal(calls, 3);
 });

@@ -8,11 +8,22 @@ import { fixture, state, settle } from './helpers.mjs';
 import { runMedia } from '../lib/media.mjs';
 import { downloadRecording } from '../lib/cloud-import.mjs';
 
-let bytes, releaseDownload, downloads=0, yandexRequests=0, browser;
+let bytes, releaseDownload, releaseGoogleBody, downloads=0, yandexRequests=0, googleRequests=0, browser;
 const gate=new Promise(r=>{releaseDownload=r;});
-const f=await fixture({cloudDownload:async(url,dir)=>{
+const googleBodyGate=new Promise(r=>{releaseGoogleBody=r;});
+const f=await fixture({cloudDownload:async(url,dir,options)=>{
   downloads++;await gate;
-  return downloadRecording(url,dir,{openResponse:async target=>{
+  return downloadRecording(url,dir,{...options,openResponse:async target=>{
+    if (new URL(target).hostname === 'drive.google.com') {
+      googleRequests++;
+      const html='<form id="download-form" action="https://drive.usercontent.google.com/download"><input type="hidden" name="id" value="browser-google"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"></form>';
+      return Object.assign(Readable.from([Buffer.from(html)]),{statusCode:200,headers:{'content-type':'text/html'}});
+    }
+    if (new URL(target).hostname === 'drive.usercontent.google.com') {
+      googleRequests++;
+      assert.equal(new URL(target).searchParams.get('confirm'),'t');
+      return Object.assign(Readable.from((async function*(){yield bytes.subarray(0,Math.floor(bytes.length/2));await googleBodyGate;yield bytes.subarray(Math.floor(bytes.length/2));})()),{statusCode:200,headers:{'content-length':String(bytes.length)}});
+    }
     if (new URL(target).hostname === 'cloud-api.yandex.net') {
       yandexRequests++;
       return Object.assign(Readable.from([Buffer.from(JSON.stringify({href:'https://files.example/yandex.mp4',method:'GET'}))]),{statusCode:200,headers:{'content-type':'application/json'}});
@@ -63,6 +74,17 @@ try {
   await page.locator('#cloud-url').fill('https://disk.yandex.ru/i/browser-public-test');await page.locator('#cloud-add').click();
   await page.locator('#cloud-result').getByText('Эта ссылка уже добавлена.',{exact:false}).waitFor();
   assert.equal(downloads,2);assert.equal(yandexRequests,1);
+  await page.locator('#cloud-url').fill('https://drive.google.com/file/d/browser-google/view?usp=sharing');
+  await page.locator('#cloud-add').click();
+  await page.locator('#cloud-result').getByText('Получение файла запущено',{exact:false}).waitFor();
+  const googleItem=(await state(f.base)).meetings.find(x=>x.sourceUrl?.includes('drive.google.com'));
+  await page.waitForFunction(()=>document.getElementById('processing-progress').hasAttribute('value')&&document.getElementById('processing-progress').value>0);
+  assert.match(await page.locator('#processing-detail').innerText(),/Скачано.*МБ.*%/);
+  releaseGoogleBody();
+  const googleResult=await settle(f.base,googleItem.id,30000);
+  assert.equal(googleResult.stages.upload,'done');assert.equal(googleResult.stages.transcription,'done');
+  assert.equal(googleRequests,2);
+  await page.locator('#activity').waitFor({state:'hidden'});
   await page.locator('#cloud-url').fill('https://files.example/private.mp4');await page.locator('#cloud-add').click();
   await page.locator('.error-box').filter({hasText:'Скачайте файл из облака самостоятельно'}).waitFor();
   await mkdir('test-output',{recursive:true});
@@ -72,4 +94,4 @@ try {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.deepEqual(errors,[]);
   console.log('Облако: фоновое получение, автозапуск, сохранение после обновления, повторная ссылка, ошибка доступа, 1440/390 px — пройдено.');
-} finally {releaseDownload();await browser?.close();await f.cleanup();}
+} finally {releaseDownload();releaseGoogleBody();await browser?.close();await f.cleanup();}

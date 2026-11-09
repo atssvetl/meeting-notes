@@ -38,6 +38,9 @@ try {
   pending = http.request(f.base + '/api/meetings', { method: 'POST', headers: { 'X-Meeting-Upload': '1', 'X-File-Name': 'pending.mp4' } });
   pending.on('error', () => {}); pending.write('pending');
   await page.locator('#activity').waitFor();
+  assert.equal(await page.locator('#processing-progress').isVisible(), true);
+  assert.equal(await page.locator('#processing-progress').getAttribute('value'), null);
+  assert.match(await page.locator('#processing-detail').innerText(), /Готово этапов: 0 из 3/);
   assert.equal(await page.locator('#choose').isDisabled(), true);
   assert.equal(await page.getByRole('radio', { name: 'Онлайн', exact: true }).isDisabled(), true);
   await page.reload(); await page.locator('#activity').waitFor();
